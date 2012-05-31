@@ -142,7 +142,7 @@ int main(int argc, char* argv[])
 			fputc(bgColorIndex, f);
 			fputc(pixelAspectRatio, f);
 		}
-		{//write global color table
+		{//global color table
 			const int ColorCount = 256;
 			char globalColorTable[ColorCount][3];
 			for(int i=0; i<ColorCount; i++){
@@ -151,6 +151,17 @@ int main(int argc, char* argv[])
 				globalColorTable[i][2] = i;
 			}
 			fwrite(globalColorTable, ColorCount*3, 1, f);
+		}
+		{//application extension
+			fputc(0x21, f);//extension introducer
+			fputc(0xff, f);//application extension label
+			fputc(11, f);//block size
+			fputs("NETSCAPE2.0", f);
+			fputc(3, f);//data block size
+			fputc(1, f);
+			fputc(0, f);
+			fputc(0, f);
+			fputc(0, f);//block terminator
 		}
 		const int FrameCount = 20;
 		for(int frame=0; frame<FrameCount; frame++){
