@@ -1,0 +1,1 @@
+g++ -o game.exe Main.cpp -Wall -Wno-multichar -O3
