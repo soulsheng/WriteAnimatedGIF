@@ -83,6 +83,20 @@ void drawImage(unsigned char* image, const int ImageWidth, const int ImageHeight
 	}
 }
 
+void writeTransparentPixelsWhereNotDifferent(
+	unsigned char* const prevImage, unsigned char* const thisImage, 
+	const int ImageWidth, const int ImageHeight, const int TranspValue)
+{
+	int count = 0;
+	for(int i=0; i<ImageWidth * ImageHeight; i++){
+		if(thisImage[i] == prevImage[i]){
+			thisImage[i] = TranspValue;
+			++count;
+		}
+	}
+	printf("Transparent pixels %d%%\n", count * 100 / (ImageWidth*ImageHeight));
+}
+
 struct BlockWriter
 {
 	FILE* f;
@@ -297,6 +311,9 @@ int main(int argc, char* argv[])
 			globalColorTable[4][0] = 200;
 			globalColorTable[4][1] = 200;
 			globalColorTable[4][2] = 50;
+			globalColorTable[255][0] = 255;
+			globalColorTable[255][1] = 0;
+			globalColorTable[255][2] = 255;
 			fwrite(globalColorTable, ColorCount*3, 1, f);
 		}
 		{//application extension
@@ -318,13 +335,14 @@ int main(int argc, char* argv[])
 				fputc(4, f);//block size
 				char packed = 0;
 				enum {DisposalNotSpecified = 0, DoNotDispose = 1, RestoreToBackgroundColor = 2, RestoreToPrevious = 3};
+				const int TransparentColorFlag = 1;
 				packed |= (DoNotDispose << 2);
-				//no user input
+				packed |= TransparentColorFlag;
 				//no transparent color index
 				fputc(packed, f);
 				short delay = 3;//* 1/100 sec
 				fwrite(&delay, 2, 1, f);
-				fputc(0, f);//no transparent color
+				fputc(255, f);//transparent color index, if transparent color flag is set
 				fputc(0, f);//block terminator
 			}
 			{//image descriptor
@@ -338,8 +356,17 @@ int main(int argc, char* argv[])
 				fputc(packed, f);
 			}
 			{//image data
-				unsigned char image[ImageWidth * ImageHeight];
-				drawImage(image, ImageWidth, ImageHeight, frame, FrameCount);
+				printf("Writing frame %d...\n", frame);
+				static unsigned char image1[ImageWidth * ImageHeight];
+				static unsigned char image2[ImageWidth * ImageHeight];
+				static unsigned char image[ImageWidth * ImageHeight];
+				unsigned char* prevFrameImage = (frame % 2) ? image1 : image2;
+				unsigned char* thisFrameImage = (frame % 2) ? image2 : image1;
+				drawImage(thisFrameImage, ImageWidth, ImageHeight, frame, FrameCount);
+				memcpy(image, thisFrameImage, ImageWidth*ImageHeight);
+				if(frame > 0){
+					writeTransparentPixelsWhereNotDifferent(prevFrameImage, image, ImageWidth, ImageHeight, 255);
+				}
 				if(1){
 					const int CodeSize = 8, MaxCodeSize = 12;
 					fputc(CodeSize, f);
