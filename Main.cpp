@@ -106,6 +106,94 @@ struct BlockWriter
 	}
 };
 
+struct TableEntry
+{
+	int length, index;
+	TableEntry* after[256];
+	TableEntry()
+	{
+		for(int i=0; i<256; i++){
+			after[i] = NULL;
+		}
+	}
+	void deleteChildren()
+	{
+		for(int i=0; i<256; i++){
+			if(after[i]){
+				after[i]->deleteChildren();
+				delete after[i];
+				after[i] = NULL;
+			}
+		}
+	}
+	TableEntry* findLongestString(unsigned char *input, int inputSize)
+	{
+		if(inputSize > 0){
+			//printf("%d,", input[0]);
+			if(after[input[0]]){
+				return after[input[0]]->findLongestString(input+1, inputSize-1);
+			}else{
+				return this;
+			}
+		}else{
+			return this;
+		}
+	}
+	void resetTable()
+	{
+		for(int i=0; i<256; i++){
+			if(after[i]){
+				after[i]->deleteChildren();
+			}else{
+				after[i] = new TableEntry();
+				after[i]->length = 1;
+				after[i]->index = i;
+			}
+		}
+		length = 256 + 2;//reserve "clear code" and "end of information"
+	}
+	void insertAfter(TableEntry* entry, unsigned char code)
+	{
+		if(entry->after[code]){
+			printf("WTF?\n");
+		}else{
+			entry->after[code] = new TableEntry;
+			entry->after[code]->length = entry->length + 1;
+			entry->after[code]->index = length++;
+		}
+	}
+};
+
+void encode(BlockWriter& output, unsigned char* input, int inputSize, const int InitCodeSize, const int MaxCodeSize)
+{
+	const int ClearCode = (1 << InitCodeSize);
+	const int EndOfInformation = ClearCode + 1;
+	int codeSize = InitCodeSize;
+	TableEntry table;
+	table.resetTable();
+	output.writeBitArray(ClearCode, codeSize+1);
+	while(inputSize > 0){
+		if((codeSize+1 >= MaxCodeSize) && ((1 << (codeSize+1)) <= table.length)){
+			output.writeBitArray(ClearCode, codeSize+1);
+			table.resetTable();
+		}
+		//printf("Searching: ");
+		TableEntry* entry = table.findLongestString(input, inputSize);
+		if(! entry){
+			printf("WTF-2\n");
+		}
+		table.insertAfter(entry, input[entry->length]);
+		//printf(" << %d\n", entry->index);
+		output.writeBitArray(entry->index, codeSize+1);
+		if((1 << (codeSize+1)) < table.length){
+			++codeSize;
+			printf("  #####  Code size %d  #####  \n", codeSize);
+		}
+		input += entry->length;
+		inputSize -= entry->length;
+	}
+	output.writeBitArray(EndOfInformation, codeSize+1);
+}
 
 int main(int argc, char* argv[])
 {
@@ -116,8 +204,8 @@ int main(int argc, char* argv[])
 	if(f){
 		printf("Opened %s for writing...\n", filename);
 		
-		const int ImageWidth = 100;
-		const int ImageHeight = 100;
+		const int ImageWidth = 200;
+		const int ImageHeight = 200;
 		
 		{//header
 			fputs("GIF89a", f);
@@ -163,7 +251,7 @@ int main(int argc, char* argv[])
 			fputc(0, f);
 			fputc(0, f);//block terminator
 		}
-		const int FrameCount = 20;
+		const int FrameCount = 24;
 		for(int frame=0; frame<FrameCount; frame++){
 			{//graphic control extension
 				fputc(0x21, f);//extension introducer
@@ -191,22 +279,39 @@ int main(int argc, char* argv[])
 				fputc(packed, f);
 			}
 			{//image data
-				int codeSize = 8;
-				int clearCode = 1 << codeSize;
-				int endOfInfo = clearCode + 1;
-				fputc(codeSize, f);
-				BlockWriter blockWriter(f);
-					for(int y=0; y<ImageHeight; y++){
-						blockWriter.writeBitArray(clearCode, codeSize+1);
-						for(int x=0; x<ImageWidth; x++){
-							int dx = (ImageWidth/2 - x), dy = (ImageHeight/2-y);
-							int r = int(sinf(float(frame)/float(FrameCount)*2*3.14f) * 10) + 20;
-							int c = (dx * dx + dy * dy < r * r) ? x+100 : y+100;
-							blockWriter.writeBitArray(c, codeSize+1);
-						}
+				unsigned char image[ImageWidth * ImageHeight];
+				for(int y=0; y<ImageHeight; y++){
+					for(int x=0; x<ImageWidth; x++){
+						int dx = (ImageWidth/2 - x), dy = (ImageHeight/2-y);
+						int r = int(sinf(float(frame)/float(FrameCount)*2*3.14f) * 20) + 25;
+						//int c = (dx * dx + dy * dy < r * r) ? x+100 : y+100;
+						int c = (dx * dx + dy * dy < r * r) ? 200 : 100;
+						image[y*ImageWidth+x] = c;
 					}
-					blockWriter.writeBitArray(endOfInfo, codeSize+1);
-				blockWriter.finish();
+				}
+				if(1){
+					const int CodeSize = 8, MaxCodeSize = 12;
+					fputc(CodeSize, f);
+					BlockWriter blockWriter(f);
+					encode(blockWriter, image, ImageWidth*ImageHeight, CodeSize, MaxCodeSize);
+					blockWriter.finish();
+				}else{
+					printf("Using uncompressed method\n");
+					int codeSize = 8;
+					int clearCode = 1 << codeSize;
+					int endOfInfo = clearCode + 1;
+					fputc(codeSize, f);
+					BlockWriter blockWriter(f);
+						for(int y=0; y<ImageHeight; y++){
+							blockWriter.writeBitArray(clearCode, codeSize+1);
+							for(int x=0; x<ImageWidth; x++){
+								int c = image[y*ImageWidth+x];
+								blockWriter.writeBitArray(c, codeSize+1);
+							}
+						}
+						blockWriter.writeBitArray(endOfInfo, codeSize+1);
+					blockWriter.finish();
+				}
 			}
 		}
 		{//write trailer
@@ -214,6 +319,7 @@ int main(int argc, char* argv[])
 		}
 		
 		fclose(f);
+		printf("Done.\n");
 	}
 	return 0;
 }
