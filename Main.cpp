@@ -42,6 +42,47 @@ header
 trailer
 */
 
+void drawImage(unsigned char* image, const int ImageWidth, const int ImageHeight, const int frame, const int FrameCount)
+{
+	const int c1R = ImageWidth / 5;
+	const int c1X1 = -c1R;
+	const int c1X2 = c1R+ImageWidth;
+	const int c1Y2 = ImageHeight/3;
+	const int c1Y1 = ImageHeight*2/3;
+	const int c2R = ImageWidth / 6;
+	const int c2Y2 = -c2R;
+	const int c2Y1 = c2R+ImageHeight;
+	const int c2X2 = ImageWidth/3;
+	const int c2X1 = ImageWidth*2/3;
+	const int c3R = ImageWidth / 4;
+	const int c3X1 = -c3R;
+	const int c3X2 = c3R+ImageWidth;
+	const int c3Y1 = ImageWidth/5;
+	const int c3Y2 = ImageHeight*4/5;
+	int f3 = (frame + FrameCount) % FrameCount;
+	int f1 = (frame + FrameCount*2/3) % FrameCount;
+	int f2 = (frame + FrameCount*3/2) % FrameCount;
+	int c1X = (c1X1 * FrameCount + c1X2 * f1- c1X1 * f1) / FrameCount;
+	int c1Y = (c1Y1 * FrameCount + c1Y2 * f1- c1Y1 * f1) / FrameCount;
+	int c2X = (c2X1 * FrameCount + c2X2 * f2 - c2X1 * f2) / FrameCount;
+	int c2Y = (c2Y1 * FrameCount + c2Y2 * f2 - c2Y1 * f2) / FrameCount;
+	int c3X = (c3X1 * FrameCount + c3X2 * f3 - c3X1 * f3) / FrameCount;
+	int c3Y = (c3Y1 * FrameCount + c3Y2 * f3 - c3Y1 * f3) / FrameCount;
+	for(int y=0; y<ImageHeight; y++){
+		for(int x=0; x<ImageWidth; x++){
+			{
+				image[y*ImageWidth+x] = 1;
+				int d1x = (c1X - x), d1y = (c1Y - y);
+				if(d1x * d1x + d1y * d1y < c1R * c1R) image[y*ImageWidth+x] = 2;
+				int d2x = (c2X - x), d2y = (c2Y - y);
+				if(d2x * d2x + d2y * d2y < c2R * c2R) image[y*ImageWidth+x] = 3;
+				int d3x = (c3X - x), d3y = (c3Y - y);
+				if(d3x * d3x + d3y * d3y < c3R * c3R) image[y*ImageWidth+x] = 4;
+			}
+		}
+	}
+}
+
 struct BlockWriter
 {
 	FILE* f;
@@ -244,6 +285,18 @@ int main(int argc, char* argv[])
 				globalColorTable[i][1] = i;
 				globalColorTable[i][2] = i;
 			}
+			globalColorTable[1][0] = 100;
+			globalColorTable[1][1] = 100;
+			globalColorTable[1][2] = 100;
+			globalColorTable[2][0] = 500;
+			globalColorTable[2][1] = 100;
+			globalColorTable[2][2] = 50;
+			globalColorTable[3][0] = 50;
+			globalColorTable[3][1] = 200;
+			globalColorTable[3][2] = 200;
+			globalColorTable[4][0] = 200;
+			globalColorTable[4][1] = 200;
+			globalColorTable[4][2] = 50;
 			fwrite(globalColorTable, ColorCount*3, 1, f);
 		}
 		{//application extension
@@ -269,7 +322,7 @@ int main(int argc, char* argv[])
 				//no user input
 				//no transparent color index
 				fputc(packed, f);
-				short delay = 2;//* 1/100 sec
+				short delay = 3;//* 1/100 sec
 				fwrite(&delay, 2, 1, f);
 				fputc(0, f);//no transparent color
 				fputc(0, f);//block terminator
@@ -286,15 +339,7 @@ int main(int argc, char* argv[])
 			}
 			{//image data
 				unsigned char image[ImageWidth * ImageHeight];
-				for(int y=0; y<ImageHeight; y++){
-					for(int x=0; x<ImageWidth; x++){
-						int dx = (ImageWidth/2 - x), dy = (ImageHeight/2-y);
-						int r = int(sinf(float(frame)/float(FrameCount)*2*3.14f) * 20) + 25;
-						//int c = (dx * dx + dy * dy < r * r) ? x+100 : y+100;
-						int c = (dx * dx + dy * dy < r * r) ? 200 : 100;
-						image[y*ImageWidth+x] = c;
-					}
-				}
+				drawImage(image, ImageWidth, ImageHeight, frame, FrameCount);
 				if(1){
 					const int CodeSize = 8, MaxCodeSize = 12;
 					fputc(CodeSize, f);
