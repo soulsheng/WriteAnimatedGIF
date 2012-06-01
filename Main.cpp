@@ -204,6 +204,12 @@ int main(int argc, char* argv[])
 	if(f){
 		printf("Opened %s for writing...\n", filename);
 		
+		const int ExtensionIntroducer = 0x21;
+		const int ApplicationExtensionLabel = 0xff;
+		const int GraphicControlLabel = 0xf9;
+		const int CommentLabel = 0xfe;
+		const int Trailer = 0x3b;
+		
 		const int ImageWidth = 200;
 		const int ImageHeight = 200;
 		
@@ -241,8 +247,8 @@ int main(int argc, char* argv[])
 			fwrite(globalColorTable, ColorCount*3, 1, f);
 		}
 		{//application extension
-			fputc(0x21, f);//extension introducer
-			fputc(0xff, f);//application extension label
+			fputc(ExtensionIntroducer, f);
+			fputc(ApplicationExtensionLabel, f);
 			fputc(11, f);//block size
 			fputs("NETSCAPE2.0", f);
 			fputc(3, f);//data block size
@@ -254,8 +260,8 @@ int main(int argc, char* argv[])
 		const int FrameCount = 24;
 		for(int frame=0; frame<FrameCount; frame++){
 			{//graphic control extension
-				fputc(0x21, f);//extension introducer
-				fputc(0xf9, f);//graphic control label
+				fputc(ExtensionIntroducer, f);
+				fputc(GraphicControlLabel, f);
 				fputc(4, f);//block size
 				char packed = 0;
 				enum {DisposalNotSpecified = 0, DoNotDispose = 1, RestoreToBackgroundColor = 2, RestoreToPrevious = 3};
@@ -314,10 +320,18 @@ int main(int argc, char* argv[])
 				}
 			}
 		}
-		{//write trailer
-			fputc(0x3b, f);
+		{//comment extension
+			fputc(ExtensionIntroducer, f);
+			fputc(CommentLabel, f);
+			const char* CommentText = "(c) Ivan Govnov";
+			const int blockSize = strlen(CommentText);
+			if(blockSize <= 255){
+				fputc(blockSize, f);
+				fputs(CommentText, f);
+			}
+			fputc(0, f);//block terminator
 		}
-		
+		fputc(Trailer, f);
 		fclose(f);
 		printf("Done.\n");
 	}
