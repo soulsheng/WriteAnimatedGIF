@@ -1,1 +1,1 @@
-g++ -o game.exe Main.cpp -Wall -Wno-multichar -O3
+g++ -o game.exe Main.cpp WriteGIF.cpp -I. -Wall -Wno-multichar -O3
