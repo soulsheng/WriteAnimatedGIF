@@ -23,25 +23,26 @@ header
 trailer
 */
 
-static void uniformPalette8x8x8(unsigned char palette[256][3])
-{
-	for(int b=0; b<4; b++){
-		for(int g=0; g<8; g++){
-			for(int r=0; r<8; r++){
-				int i = b * 64 + g*8 + r;
-				palette[i][0] = r*32;
-				palette[i][1] = g*32;
-				palette[i][2] = b*64;
-			}
-		}
-	}
-}
-
-static void convertImageToIndexed8x8x8(int Width, int Height, unsigned char* rgbImage, unsigned char* indexImage)
+static void indexizeImageFromPalette(int Width, int Height, unsigned char* rgbImage, unsigned char* indexImage, unsigned char* palette, int& paletteSize)
 {
 	for(int i=0; i<Width*Height; i++){
 		unsigned char* rgb = rgbImage + 3 * i;
-		indexImage[i] = rgb[2] / 32 * 64 + rgb[1] / 32 * 8 + rgb[0] / 32;
+		for(int p=0; p<paletteSize; p++){
+			unsigned char* pal = palette + 3 * p;
+			if(rgb[0] == pal[0] && rgb[1] == pal[1] && rgb[2] == pal[2]){
+				indexImage[i] = p;
+				goto found;
+			}
+		}
+		if(paletteSize < 256){
+			unsigned char* pal = palette + 3 * paletteSize;
+			pal[0] = rgb[0];
+			pal[1] = rgb[1];
+			pal[2] = rgb[2];
+			paletteSize ++;
+		}
+found:
+		;
 	}
 }
 
@@ -148,7 +149,6 @@ struct TableEntry
 	TableEntry* findLongestString(unsigned char *input, int inputSize)
 	{
 		if(inputSize > 0){
-			//printf("%d,", input[0]);
 			if(after[input[0]]){
 				return after[input[0]]->findLongestString(input+1, inputSize-1);
 			}else{
@@ -227,11 +227,36 @@ struct Frame
 	int delay;//* 1/100 sec
 };
 
+struct ColorTreeNode
+{
+	int rgbCount;
+	unsigned char* rgbArray;//external pointer, do not dispose
+	int rgbSum[3];
+	int rgbAver[3];
+	int divAxis;
+	int divValue;
+	ColorTreeNode* sub[2];
+	int colorIndex;
+	ColorTreeNode(): rgbCount(0) {sub[0] = sub[1] = NULL;}
+	bool isLeaf() {return (sub[0] == NULL && sub[1] == NULL);}
+};
+
+struct ColorTree
+{
+	static const int NodeArraySize = 1024;
+	ColorTreeNode nodeArray[NodeArraySize];
+	int nodeCount, leafCount;
+	ColorTree(): nodeCount(0), leafCount(0) {}
+};
+
 struct GIF
 {
 	int width, height;
 	Frame* frames, *lastFrame;
 	int frameDelay;
+	unsigned char* palette;
+	int paletteSize;
+	ColorTree* colorTree;
 };
 
 void dispose(GIF* gif)
@@ -244,6 +269,12 @@ void dispose(GIF* gif)
 		}
 		delete f;
 		f = next;
+	}
+	if(gif->palette){
+		delete[] gif->palette;
+	}
+	if(gif->colorTree){
+		delete gif->colorTree;
 	}
 	delete gif;
 }
@@ -262,7 +293,164 @@ GIF* newGIF(int delay)
 	gif->frames = NULL;
 	gif->lastFrame = NULL;
 	gif->frameDelay = delay;
+	gif->palette = NULL;
+	gif->paletteSize = 0;
+	gif->colorTree = NULL;
 	return gif;
+}
+
+int colorIndexFromTree(ColorTree* tree, unsigned char* rgb)
+{
+	if(tree->nodeCount > 0){
+		ColorTreeNode* n = &tree->nodeArray[0];
+		while(true){
+			if(n->sub[0] && rgb[n->divAxis] <= n->divValue){
+				n = n->sub[0];
+			}else if(n->sub[1]){
+				n = n->sub[1];
+			}else{
+				return n->colorIndex;
+			}
+		}
+	}
+	return 0;
+}
+
+static void indexizeImageFromColorTree(int Width, int Height, unsigned char* rgbImage, unsigned char* indexImage, ColorTree* colorTree)
+{
+	for(int i=0; i<Width*Height; i++){
+		unsigned char* rgb = rgbImage + 3 * i;
+		indexImage[i] = colorIndexFromTree(colorTree, rgb);
+	}
+}
+
+ColorTreeNode* allocNode(ColorTree* tree)
+{
+	if(tree->nodeCount < ColorTree::NodeArraySize){
+		return &tree->nodeArray[tree->nodeCount++];
+	}
+	printf("Error: allocating color node from full array\n");
+	return NULL;
+}
+
+void processLeafs(ColorTree* tree)
+{
+	for(int i=0; i<tree->nodeCount; i++){
+		ColorTreeNode& n = tree->nodeArray[i];
+		if(n.isLeaf()){
+			//treat current node as leaf
+			n.rgbSum[0] = n.rgbSum[1] = n.rgbSum[2] = 0;
+			for(int k=0; k<n.rgbCount; k++){
+				for(int i=0; i<3; i++){
+					n.rgbSum[i] += n.rgbArray[3*k+i];
+				}
+			}
+			for(int i=0; i<3; i++){
+				n.rgbAver[i] = n.rgbSum[i] / n.rgbCount;
+			}
+		}
+	}
+}
+
+void buildColorTree(ColorTree* tree, unsigned char* srcRgbArray, int srcRgbCount)
+{
+	if(srcRgbCount < 1){
+		printf("Error: creating color tree from 0 colors\n");
+		return;
+	}
+	memset(tree, 0, sizeof(ColorTree));
+	ColorTreeNode* root = allocNode(tree);
+	root->rgbCount = srcRgbCount;
+	root->rgbArray = srcRgbArray;
+	tree->leafCount = 1;
+	while(true){
+		if(tree->leafCount >= 256){
+			printf("Tree has 256 leafs\n");
+			processLeafs(tree);
+			break;
+		}
+		{//find fattest leaf and subdivide it
+			ColorTreeNode* fattestNode = NULL;
+			for(int i=0; i<=tree->nodeCount; i++){
+				ColorTreeNode* n = &tree->nodeArray[i];
+				if(n->isLeaf()){
+					if(n->rgbCount > 1){
+						if(!fattestNode || fattestNode->rgbCount < n->rgbCount){
+							fattestNode = n;
+						}
+					}
+				}
+			}
+			if(! fattestNode){
+				printf("All leafs have 1 element\n");
+				processLeafs(tree);
+				break;
+			}
+			ColorTreeNode* n = fattestNode;
+			int rgbMin[3] = {n->rgbArray[0], n->rgbArray[1], n->rgbArray[2]};
+			int rgbMax[3] = {n->rgbArray[0], n->rgbArray[1], n->rgbArray[2]};
+			int rgbExt[3] = {0, 0, 0};
+			{//calculate array extents
+				for(int k=0; k<n->rgbCount; k++){
+					for(int i=0; i<3; i++){
+						int v = int(n->rgbArray[3*k+i]);
+						if(v < rgbMin[i]) rgbMin[i] = v;
+						if(rgbMax[i] < v) rgbMax[i] = v;
+					}
+				}
+				for(int i=0; i<3; i++){
+					rgbExt[i] = rgbMax[i] - rgbMin[i];
+				}
+			}
+			{//decide on divisor plane
+				if((rgbExt[0] > rgbExt[1]) && (rgbExt[0] > rgbExt[2])){
+					n->divAxis = 0;
+				}else if(rgbExt[1] > rgbExt[2]){
+					n->divAxis = 1;
+				}else{
+					n->divAxis = 2;
+				}
+				n->divValue = (rgbMin[n->divAxis] + rgbMax[n->divAxis]) / 2;
+			}
+			{//sort colors relative to divisor plane
+				unsigned char* rgbLeft = n->rgbArray, *rgbRight = n->rgbArray + 3 * (n->rgbCount-1);
+				while(rgbLeft < rgbRight){
+					while(rgbLeft[n->divAxis] <= n->divValue && rgbLeft < rgbRight){
+						rgbLeft += 3;
+					}
+					while(rgbRight[n->divAxis] > n->divValue && rgbLeft < rgbRight){
+						rgbRight -= 3;
+					}
+					if(rgbLeft < rgbRight){
+						for(int i=0; i<3; i++){
+							unsigned char x = rgbLeft[i];
+							rgbLeft[i] = rgbRight[i];
+							rgbRight[i] = x;
+						}
+					}
+				}
+				int inLeftCount = (rgbLeft - n->rgbArray) / 3;
+				int inRightCount = n->rgbCount - (rgbRight - n->rgbArray)/3 - 1;
+				if(inLeftCount > 0){
+					n->sub[0] = allocNode(tree);
+					if(n->sub[0]){
+						n->sub[0]->rgbCount = inLeftCount;
+						n->sub[0]->rgbArray = n->rgbArray;
+					}
+				}
+				if(inRightCount > 0){
+					n->sub[1] = allocNode(tree);
+					if(n->sub[1]){
+						n->sub[1]->rgbCount = inRightCount;
+						n->sub[1]->rgbArray = n->rgbArray + inLeftCount * 3;
+					}
+				}
+				if(n->sub[0] && n->sub[1]){
+					tree->leafCount ++;
+				}
+			}
+		}
+	}
 }
 
 void addFrame(GIF* gif, int W, int H, unsigned char* rgbImage, int delay)
@@ -270,7 +458,63 @@ void addFrame(GIF* gif, int W, int H, unsigned char* rgbImage, int delay)
 	Frame* f = new Frame;
 	f->delay = delay;
 	f->indexImage = new unsigned char[W*H];
-	convertImageToIndexed8x8x8(W, H, rgbImage, f->indexImage);
+	
+	if(! gif->palette){
+		static char colorBitArray[256*256*256/8];//all possible 24-bit colors are represented
+		memset(colorBitArray, 0, sizeof(colorBitArray));
+		int UniqueArraySize = W * H / 3;
+		unsigned char* rgbUniqueArray = new unsigned char[UniqueArraySize * 3];
+		int uniqueCount = 0;
+		int unique = 0;
+		for(int i=0; i<W*H; i++){
+			unsigned char* rgb = rgbImage + 3 * i;
+			int x = rgb[0] + rgb[1] * 256 + rgb[2] * 256 * 256;
+			int byte = x / 8;
+			int mask = 1 << (x % 8);
+			if((colorBitArray[byte] & mask) == 0){
+				unique ++;
+				colorBitArray[byte] |= mask;
+				if(uniqueCount < UniqueArraySize){
+					unsigned char* u = rgbUniqueArray + uniqueCount * 3;
+					u[0] = rgb[0], u[1] = rgb[1], u[2] = rgb[2];
+					uniqueCount ++;
+				}else{
+					printf("UniqueArraySize insufficient\n");
+				}
+			}
+		}
+		printf("Unique color count %d\n", unique);
+		if(unique <= 256){//This is only an estimate. We don't know other frames' colors yet.
+			printf("Using exact palette\n");
+			gif->palette = new unsigned char[256*3];
+		}else{
+			printf("Using color tree to quantize color\n");
+			gif->colorTree = new ColorTree;
+			buildColorTree(gif->colorTree, rgbUniqueArray, uniqueCount);
+			gif->palette = new unsigned char[256*3];
+			unsigned char* rgbPal = gif->palette;
+			int colorIndex = 0;
+			for(int i=0; i<gif->colorTree->nodeCount; i++){
+				ColorTreeNode* n = &gif->colorTree->nodeArray[i];
+				if(n->isLeaf()){
+					rgbPal[0] = n->rgbAver[0];
+					rgbPal[1] = n->rgbAver[1];
+					rgbPal[2] = n->rgbAver[2];
+					rgbPal += 3;
+					n->colorIndex = colorIndex++;
+				}
+			}
+		}
+		delete[] rgbUniqueArray;
+	}
+	if(gif->palette){
+		if(gif->colorTree){
+			printf("Applying color tree to image\n");
+			indexizeImageFromColorTree(W, H, rgbImage, f->indexImage, gif->colorTree);
+		}else{
+			indexizeImageFromPalette(W, H, rgbImage, f->indexImage, gif->palette, gif->paletteSize);
+		}
+	}
 	f->next = NULL;
 	if(gif->lastFrame){
 		gif->lastFrame->next = f;
@@ -335,9 +579,9 @@ void write(GIF* gif, const char* filename)
 	}
 	{//global color table
 		const int ColorCount = 256;
-		unsigned char globalColorTable[ColorCount][3];
-		uniformPalette8x8x8(globalColorTable);
-		fwrite(globalColorTable, ColorCount*3, 1, f);
+		if(gif->palette){
+			fwrite(gif->palette, ColorCount*3, 1, f);
+		}
 	}
 	if(isAnimated(gif)){//application extension
 		fputc(ExtensionIntroducer, f);
