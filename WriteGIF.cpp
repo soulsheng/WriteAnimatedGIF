@@ -1,3 +1,4 @@
+//#include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
@@ -22,6 +23,34 @@ header
 		comment extension
 trailer
 */
+
+static int nearestIndexInPalette(unsigned char* palette, int paletteSize, unsigned char* rgb)
+{
+	int bestIndex = 0, bestDist = 0;
+	for(int i=0; i<paletteSize; i++){
+		unsigned char* p = palette + i * 3;
+		int dr = p[0] - rgb[0], dg = p[1] - rgb[1], db = p[2] - rgb[2];
+		int d = dr * dr + dg * dg + db * db;
+		if(d == 0){
+			return i;
+		}
+		if(bestDist == 0 || d < bestDist){
+			bestIndex = i;
+			bestDist = d;
+		}
+	}
+	return bestIndex;
+}
+
+static void indexizeImageFromPaletteFuzzy(
+	int Width, int Height, unsigned char* rgbImage, unsigned char* indexImage, 
+	unsigned char* palette, int paletteSize)
+{
+	for(int i=0; i<Width*Height; i++){
+		unsigned char* rgb = rgbImage + 3 * i;
+		indexImage[i] = nearestIndexInPalette(palette, paletteSize, rgb);
+	}
+}
 
 static void indexizeImageFromPalette(int Width, int Height, unsigned char* rgbImage, unsigned char* indexImage, unsigned char* palette, int& paletteSize)
 {
@@ -453,6 +482,45 @@ void buildColorTree(ColorTree* tree, unsigned char* srcRgbArray, int srcRgbCount
 	}
 }
 
+
+int removeColorFromArray(unsigned char* rgbArray, int rgbCount, unsigned char r, unsigned char g, unsigned char b)
+{
+	int newCount = 0;
+	unsigned char* dst = rgbArray, *src = rgbArray;
+	for(int i=0; i<rgbCount; i++){
+		if(src[0] == r && src[1] == g && src[2] == b){
+			//skip it
+		}else{
+			newCount ++;
+			if(dst != src){
+				dst[0] = src[0], dst[1] = src[1], dst[2] = src[2];
+			}
+			dst += 3;
+		}
+		src += 3;
+	}
+	return newCount;
+}
+
+int calculatePaletteStatistically(unsigned char* rgbArray, int rgbCount, unsigned char* palette)
+{
+	int paletteSize = 0;
+	while(rgbCount > 0 && paletteSize < 256){
+		//int index = rand() * rgbCount / RAND_MAX;//pick random color. Statistically, it is likely to be most frequent color.
+		int index = rgbCount / 2;
+		//printf("index %d/%d\n", index, rgbCount);
+		unsigned char* rgb = rgbArray + 3 * index;
+		unsigned char* pal = palette + 3 * paletteSize;
+		for(int i=0; i<3; i++) pal[i] = rgb[i];
+		paletteSize ++;
+		rgbCount = removeColorFromArray(rgbArray, rgbCount, rgb[0], rgb[1], rgb[2]);
+	}
+	if(rgbCount <= 0){
+		//TODO: return "palette is precise" code
+	}
+	return paletteSize;
+}
+
 void addFrame(GIF* gif, int W, int H, unsigned char* rgbImage, int delay)
 {
 	Frame* f = new Frame;
@@ -460,60 +528,16 @@ void addFrame(GIF* gif, int W, int H, unsigned char* rgbImage, int delay)
 	f->indexImage = new unsigned char[W*H];
 	
 	if(! gif->palette){
-		static char colorBitArray[256*256*256/8];//all possible 24-bit colors are represented
-		memset(colorBitArray, 0, sizeof(colorBitArray));
-		int UniqueArraySize = W * H / 3;
-		unsigned char* rgbUniqueArray = new unsigned char[UniqueArraySize * 3];
-		int uniqueCount = 0;
-		int unique = 0;
-		for(int i=0; i<W*H; i++){
-			unsigned char* rgb = rgbImage + 3 * i;
-			int x = rgb[0] + rgb[1] * 256 + rgb[2] * 256 * 256;
-			int byte = x / 8;
-			int mask = 1 << (x % 8);
-			if((colorBitArray[byte] & mask) == 0){
-				unique ++;
-				colorBitArray[byte] |= mask;
-				if(uniqueCount < UniqueArraySize){
-					unsigned char* u = rgbUniqueArray + uniqueCount * 3;
-					u[0] = rgb[0], u[1] = rgb[1], u[2] = rgb[2];
-					uniqueCount ++;
-				}else{
-					printf("UniqueArraySize insufficient\n");
-				}
-			}
-		}
-		printf("Unique color count %d\n", unique);
-		if(unique <= 256){//This is only an estimate. We don't know other frames' colors yet.
-			printf("Using exact palette\n");
-			gif->palette = new unsigned char[256*3];
-		}else{
-			printf("Using color tree to quantize color\n");
-			gif->colorTree = new ColorTree;
-			buildColorTree(gif->colorTree, rgbUniqueArray, uniqueCount);
-			gif->palette = new unsigned char[256*3];
-			unsigned char* rgbPal = gif->palette;
-			int colorIndex = 0;
-			for(int i=0; i<gif->colorTree->nodeCount; i++){
-				ColorTreeNode* n = &gif->colorTree->nodeArray[i];
-				if(n->isLeaf()){
-					rgbPal[0] = n->rgbAver[0];
-					rgbPal[1] = n->rgbAver[1];
-					rgbPal[2] = n->rgbAver[2];
-					rgbPal += 3;
-					n->colorIndex = colorIndex++;
-				}
-			}
-		}
-		delete[] rgbUniqueArray;
+		unsigned char* rgbTempArray = new unsigned char[W*H*3];
+		memcpy(rgbTempArray, rgbImage, W*H*3);
+		gif->palette = new unsigned char[256*3];
+		memset(gif->palette, 0, 256*3);
+		gif->paletteSize = calculatePaletteStatistically(rgbTempArray, W*H, gif->palette);
+		delete[] rgbTempArray;
+		printf("Palette size %d\n", gif->paletteSize);
 	}
 	if(gif->palette){
-		if(gif->colorTree){
-			printf("Applying color tree to image\n");
-			indexizeImageFromColorTree(W, H, rgbImage, f->indexImage, gif->colorTree);
-		}else{
-			indexizeImageFromPalette(W, H, rgbImage, f->indexImage, gif->palette, gif->paletteSize);
-		}
+		indexizeImageFromPaletteFuzzy(W, H, rgbImage, f->indexImage, gif->palette, gif->paletteSize);
 	}
 	f->next = NULL;
 	if(gif->lastFrame){

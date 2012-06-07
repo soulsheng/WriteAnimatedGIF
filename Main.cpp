@@ -21,11 +21,11 @@ void drawImage(unsigned char* image, const int ImageWidth, const int ImageHeight
 	const int c2X2 = ImageWidth/3;
 	const int c2X1 = ImageWidth*2/3;
 	const int c3R = ImageWidth / 4;
-	const int c3X1 = -c3R;
-	const int c3X2 = c3R+ImageWidth;
-	const int c3Y1 = ImageWidth/5;
-	const int c3Y2 = ImageHeight*4/5;
-	int f3 = (frame + FrameCount) % FrameCount;
+	const int c3X2 = -c3R;
+	const int c3X1 = c3R+ImageWidth;
+	const int c3Y2 = ImageWidth/5;
+	const int c3Y1 = ImageHeight*4/5;
+	int f3 = (frame + FrameCount*4/5) % FrameCount;
 	int f1 = (frame + FrameCount*2/3) % FrameCount;
 	int f2 = (frame + FrameCount*3/2) % FrameCount;
 	int c1X = (c1X1 * FrameCount + c1X2 * f1- c1X1 * f1) / FrameCount;
