@@ -88,7 +88,7 @@ static void writeTransparentPixelsWhereNotDifferent(
 			outImage[i] = thisImage[i];
 		}
 	}
-	printf("Transparent pixels %d%%\n", count * 100 / (ImageWidth*ImageHeight));
+	printf(" - %d%% transparent", count * 100 / (ImageWidth*ImageHeight));
 }
 
 struct BlockWriter
@@ -98,6 +98,7 @@ struct BlockWriter
 	char curBits;
 	int byteCount;
 	int curBitMask;
+	int totalBytesWritten;
 	
 	BlockWriter(FILE* f)
 		: f(f)
@@ -105,6 +106,7 @@ struct BlockWriter
 		curBits = 0;
 		byteCount = 0;
 		curBitMask = 1;
+		totalBytesWritten = 0;
 	}
 	void finish()
 	{
@@ -126,6 +128,7 @@ struct BlockWriter
 	}
 	void writeByte()
 	{
+		totalBytesWritten++;
 		bytes[byteCount] = curBits;
 		byteCount ++;
 		if(byteCount >= 255){
@@ -534,7 +537,6 @@ void addFrame(GIF* gif, int W, int H, unsigned char* rgbImage, int delay)
 		memset(gif->palette, 0, 256*3);
 		gif->paletteSize = calculatePaletteStatistically(rgbTempArray, W*H, gif->palette);
 		delete[] rgbTempArray;
-		printf("Palette size %d\n", gif->paletteSize);
 	}
 	if(gif->palette){
 		indexizeImageFromPaletteFuzzy(W, H, rgbImage, f->indexImage, gif->palette, gif->paletteSize);
@@ -618,7 +620,9 @@ void write(GIF* gif, const char* filename)
 		fwrite(&repeatCount, 2, 1, f);
 		fputc(0, f);//block terminator
 	}
-	for(Frame* frame=gif->frames, *prevFrame=NULL; frame!=NULL; prevFrame=frame, frame=frame->next){
+	int frameNumber = 0;
+	for(Frame* frame=gif->frames, *prevFrame=NULL; frame!=NULL; prevFrame=frame, frame=frame->next, ++frameNumber){
+		printf("frame %d", frameNumber);
 		{//graphic control extension
 			fputc(ExtensionIntroducer, f);
 			fputc(GraphicControlLabel, f);
@@ -659,8 +663,9 @@ void write(GIF* gif, const char* filename)
 				const int CodeSize = 8, MaxCodeSize = 12;
 				fputc(CodeSize, f);
 				BlockWriter blockWriter(f);
-				encode(blockWriter, frame->indexImage, gif->width*gif->height, CodeSize, MaxCodeSize);
+				encode(blockWriter, image, gif->width*gif->height, CodeSize, MaxCodeSize);
 				blockWriter.finish();
+				printf(" - %d bytes", blockWriter.totalBytesWritten);
 			}else{
 				printf("Using uncompressed method\n");
 				int codeSize = 8;
@@ -682,7 +687,8 @@ void write(GIF* gif, const char* filename)
 				delete[] image;
 			}
 		}
-	}
+		printf("\n");
+	}//for frames
 	{//comment extension
 		fputc(ExtensionIntroducer, f);
 		fputc(CommentLabel, f);
