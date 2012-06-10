@@ -91,6 +91,22 @@ static void writeTransparentPixelsWhereNotDifferent(
 	printf(" - %d%% transparent", count * 100 / (ImageWidth*ImageHeight));
 }
 
+void calculatePossibleCrop(int width, int height, unsigned char* indexImage, unsigned char TranspColorIndex, int& left, int& right, int& top, int& bottom)
+{
+	left = width, right = 0, top = height, bottom = 0;
+	for(int y=0; y<height; y++){
+		for(int x=0; x<width; x++){
+			unsigned char v = *(indexImage++);
+			if(v != TranspColorIndex){
+				if(x < left) left = x;
+				if(right < x) right = x;
+				if(y < top) top = y;
+				if(bottom < y) bottom = y;
+			}
+		}
+	}
+}
+
 struct BlockWriter
 {
 	FILE* f;
@@ -641,29 +657,48 @@ void write(GIF* gif, const char* filename)
 			fputc(TranspColorIndex, f);//transparent color index, if transparent color flag is set
 			fputc(0, f);//block terminator
 		}
-		{//image descriptor
-			short left = 0, top = 0, width = gif->width, height = gif->height;
-			char packed = 0;
-			fputc(0x2c, f);//separator
-			fwrite(&left, 2, 1, f);
-			fwrite(&top, 2, 1, f);
-			fwrite(&width, 2, 1, f);
-			fwrite(&height, 2, 1, f);
-			fputc(packed, f);
-		}
 		{//image data
+			short fLeft = 0, fTop = 0, fWidth = gif->width, fHeight = gif->height;
 			unsigned char* image = frame->indexImage;
 			if(prevFrame){
 				image = new unsigned char[gif->width * gif->height];
 				writeTransparentPixelsWhereNotDifferent(
 					prevFrame->indexImage, frame->indexImage, image,
 					gif->width, gif->height, TranspColorIndex);
+				if(1){//crop image if has transparent pixels on borders
+					int cLeft, cRight, cTop, cBottom;
+					calculatePossibleCrop(gif->width, gif->height, image, TranspColorIndex, cLeft, cRight, cTop, cBottom);
+					if(cLeft <= cRight && cTop <= cBottom){
+						fLeft = cLeft;
+						fTop = cTop;
+						fWidth = cRight + 1 - cLeft;
+						fHeight = cBottom + 1 - cTop;
+						unsigned char* cImage = new unsigned char[fWidth * fHeight];
+						for(int y=0; y<fHeight; y++){
+							unsigned char* srcLine = image + (fTop + y) * gif->width + fLeft;
+							unsigned char* dstLine = cImage + y * fWidth;
+							memcpy(dstLine, srcLine, fWidth);
+						}
+						delete[] image;
+						image = cImage;
+						printf(" - cropped to %d%% area", 100 * (fWidth*fHeight) / (gif->width*gif->height));
+					}
+				}
+			}
+			{//image descriptor
+				char packed = 0;
+				fputc(0x2c, f);//separator
+				fwrite(&fLeft, 2, 1, f);
+				fwrite(&fTop, 2, 1, f);
+				fwrite(&fWidth, 2, 1, f);
+				fwrite(&fHeight, 2, 1, f);
+				fputc(packed, f);
 			}
 			if(1){
 				const int CodeSize = 8, MaxCodeSize = 12;
 				fputc(CodeSize, f);
 				BlockWriter blockWriter(f);
-				encode(blockWriter, image, gif->width*gif->height, CodeSize, MaxCodeSize);
+				encode(blockWriter, image, fWidth*fHeight, CodeSize, MaxCodeSize);
 				blockWriter.finish();
 				printf(" - %d bytes", blockWriter.totalBytesWritten);
 			}else{
