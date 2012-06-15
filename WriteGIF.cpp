@@ -1,3 +1,4 @@
+//#include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
@@ -339,40 +340,63 @@ GIF* newGIF(int delay)
 	return gif;
 }
 
+bool setHasColor(char set[256*256*256/8], unsigned char* rgb)
+{
+	int i = int(rgb[0]) * 256 * 256 + int(rgb[1]) * 256 + int(rgb[2]);
+	return ((set[i/8] & (1 << (i%8))) != 0);
+}
+
+void addColorToSet(char set[256*256*256/8], unsigned char* rgb)
+{
+	int i = int(rgb[0]) * 256 * 256 + int(rgb[1]) * 256 + int(rgb[2]);
+	set[i/8] |= (1 << (i%8));
+}
+
 void calculatePaletteByMedianCut(GIF* gif)
 {
 	printf("Caculating palette by median cut\n");
-	static const int UniqueColorArraySize = 2048;
-	static unsigned char uniqueColorArray[UniqueColorArraySize*3];
+	unsigned char* uniqueColorArray = NULL;
 	int uniqueColorCount = 0;
-	
-	{//fill unique color array
-		printf("Determining unique color set [");
-		static char colorBitSet[256*256*256/8];
+	static char colorBitSet[256*256*256/8];
+	{
+		printf("Calculating unique color count [");
 		memset(colorBitSet, 0, 256*256*256/8);
 		for(Frame* frame=gif->frames; frame!=NULL; frame=frame->next){
-			if(uniqueColorCount >= UniqueColorArraySize){
-				break;
-			}
 			printf("*");
-			unsigned char* rgb = frame->rgbImage;
-			for(int i=0; i<gif->width*gif->height; i++){
-				if(uniqueColorCount >= UniqueColorArraySize){
-					break;
+			unsigned char* end = frame->rgbImage + gif->width * gif->height * 3;
+			for(unsigned char *rgb=frame->rgbImage; rgb<end; rgb+=3){
+				if(! setHasColor(colorBitSet, rgb)){
+					addColorToSet(colorBitSet, rgb);
+					uniqueColorCount++;
 				}
-				int colorIndex = int(rgb[0]) * 256 * 256 + int(rgb[1]) * 256 + int(rgb[2]);
-				if((colorBitSet[colorIndex/8] & (1 << (colorIndex%8))) == 0){
-					colorBitSet[colorIndex/8] |= (1 << (colorIndex%8));
-					unsigned char* u = uniqueColorArray + (uniqueColorCount++) * 3;
-					u[0] = rgb[0], u[1] = rgb[1], u[2] = rgb[2];
-				}
-				rgb += 3;
 			}
 		}
 		printf("]\nUnique color count %d\n", uniqueColorCount);
-		if(uniqueColorCount >= UniqueColorArraySize){
-			printf("Warning: image too rich. Try expanding unique color array.\n");
+	}
+	uniqueColorArray = new unsigned char[uniqueColorCount * 3];
+	{
+		printf("Filling unique color array [");
+		memset(colorBitSet, 0, 256*256*256/8);
+		unsigned char* afterLastUnique = uniqueColorArray + uniqueColorCount * 3;
+		unsigned char* u = uniqueColorArray;
+		for(Frame* frame=gif->frames; frame!=NULL; frame=frame->next){
+			printf("*");
+			if(u >= afterLastUnique){
+				break;
+			}
+			unsigned char* end = frame->rgbImage + gif->width * gif->height * 3;
+			for(unsigned char *rgb=frame->rgbImage; rgb<end; rgb+=3){
+				if(u >= afterLastUnique){
+					break;
+				}
+				if(! setHasColor(colorBitSet, rgb)){
+					addColorToSet(colorBitSet, rgb);
+					u[0] = rgb[0], u[1] = rgb[1], u[2] = rgb[2];
+					u += 3;
+				}
+			}
 		}
+		printf("]\n");
 	}
 	
 	struct ColorBox
@@ -490,6 +514,7 @@ void calculatePaletteByMedianCut(GIF* gif)
 			printf("]\n");
 		}
 	}
+	delete[] uniqueColorArray;
 }
 
 void addFrame(GIF* gif, int W, int H, unsigned char* rgbImage, int delay)
