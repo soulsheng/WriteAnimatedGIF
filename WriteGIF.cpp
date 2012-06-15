@@ -1,4 +1,3 @@
-//#include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
@@ -23,6 +22,45 @@ header
 		comment extension
 trailer
 */
+
+void swap(unsigned char* a, unsigned char* b)
+{
+	for(int i=0; i<3; i++){
+		unsigned char x = a[i];
+		a[i] = b[i];
+		b[i] = x;
+	}
+}
+
+void sortColorsByAxis(unsigned char* array, int count, int axis)
+{
+	if(count < 2){
+		return;
+	}
+	unsigned char pivot = (array + (count/2)*3)[axis];
+	unsigned char* left = array, *right = array + (count-1)*3;
+	while(left < right){
+		while(left[axis] < pivot){
+			left += 3;
+		}
+		while(right[axis] > pivot){
+			right -= 3;
+		}
+		if(left < right){
+			swap(left, right);
+			left += 3;
+			right -= 3;
+		}
+	}
+	int leftCount = (left - array)/3;
+	int rightCount = count - leftCount;
+	if(leftCount > 1){
+		sortColorsByAxis(array, leftCount, axis);
+	}
+	if(rightCount > 1){
+		sortColorsByAxis(array+leftCount*3, rightCount, axis);
+	}
+}
 
 static int nearestIndexInPalette(unsigned char* palette, int paletteSize, unsigned char* rgb)
 {
@@ -49,29 +87,6 @@ static void indexizeImageFromPaletteFuzzy(
 	for(int i=0; i<Width*Height; i++){
 		unsigned char* rgb = rgbImage + 3 * i;
 		indexImage[i] = nearestIndexInPalette(palette, paletteSize, rgb);
-	}
-}
-
-static void indexizeImageFromPalette(int Width, int Height, unsigned char* rgbImage, unsigned char* indexImage, unsigned char* palette, int& paletteSize)
-{
-	for(int i=0; i<Width*Height; i++){
-		unsigned char* rgb = rgbImage + 3 * i;
-		for(int p=0; p<paletteSize; p++){
-			unsigned char* pal = palette + 3 * p;
-			if(rgb[0] == pal[0] && rgb[1] == pal[1] && rgb[2] == pal[2]){
-				indexImage[i] = p;
-				goto found;
-			}
-		}
-		if(paletteSize < 256){
-			unsigned char* pal = palette + 3 * paletteSize;
-			pal[0] = rgb[0];
-			pal[1] = rgb[1];
-			pal[2] = rgb[2];
-			paletteSize ++;
-		}
-found:
-		;
 	}
 }
 
@@ -271,30 +286,9 @@ namespace gif
 struct Frame
 {
 	Frame* next;
+	unsigned char* rgbImage;
 	unsigned char* indexImage;
 	int delay;//* 1/100 sec
-};
-
-struct ColorTreeNode
-{
-	int rgbCount;
-	unsigned char* rgbArray;//external pointer, do not dispose
-	int rgbSum[3];
-	int rgbAver[3];
-	int divAxis;
-	int divValue;
-	ColorTreeNode* sub[2];
-	int colorIndex;
-	ColorTreeNode(): rgbCount(0) {sub[0] = sub[1] = NULL;}
-	bool isLeaf() {return (sub[0] == NULL && sub[1] == NULL);}
-};
-
-struct ColorTree
-{
-	static const int NodeArraySize = 1024;
-	ColorTreeNode nodeArray[NodeArraySize];
-	int nodeCount, leafCount;
-	ColorTree(): nodeCount(0), leafCount(0) {}
 };
 
 struct GIF
@@ -304,7 +298,6 @@ struct GIF
 	int frameDelay;
 	unsigned char* palette;
 	int paletteSize;
-	ColorTree* colorTree;
 };
 
 void dispose(GIF* gif)
@@ -315,14 +308,14 @@ void dispose(GIF* gif)
 		if(f->indexImage){
 			delete[] f->indexImage;
 		}
+		if(f->rgbImage){
+			delete[] f->rgbImage;
+		}
 		delete f;
 		f = next;
 	}
 	if(gif->palette){
 		delete[] gif->palette;
-	}
-	if(gif->colorTree){
-		delete gif->colorTree;
 	}
 	delete gif;
 }
@@ -343,220 +336,169 @@ GIF* newGIF(int delay)
 	gif->frameDelay = delay;
 	gif->palette = NULL;
 	gif->paletteSize = 0;
-	gif->colorTree = NULL;
 	return gif;
 }
 
-int colorIndexFromTree(ColorTree* tree, unsigned char* rgb)
+void calculatePaletteByMedianCut(GIF* gif)
 {
-	if(tree->nodeCount > 0){
-		ColorTreeNode* n = &tree->nodeArray[0];
-		while(true){
-			if(n->sub[0] && rgb[n->divAxis] <= n->divValue){
-				n = n->sub[0];
-			}else if(n->sub[1]){
-				n = n->sub[1];
-			}else{
-				return n->colorIndex;
-			}
-		}
-	}
-	return 0;
-}
-
-static void indexizeImageFromColorTree(int Width, int Height, unsigned char* rgbImage, unsigned char* indexImage, ColorTree* colorTree)
-{
-	for(int i=0; i<Width*Height; i++){
-		unsigned char* rgb = rgbImage + 3 * i;
-		indexImage[i] = colorIndexFromTree(colorTree, rgb);
-	}
-}
-
-ColorTreeNode* allocNode(ColorTree* tree)
-{
-	if(tree->nodeCount < ColorTree::NodeArraySize){
-		return &tree->nodeArray[tree->nodeCount++];
-	}
-	printf("Error: allocating color node from full array\n");
-	return NULL;
-}
-
-void processLeafs(ColorTree* tree)
-{
-	for(int i=0; i<tree->nodeCount; i++){
-		ColorTreeNode& n = tree->nodeArray[i];
-		if(n.isLeaf()){
-			//treat current node as leaf
-			n.rgbSum[0] = n.rgbSum[1] = n.rgbSum[2] = 0;
-			for(int k=0; k<n.rgbCount; k++){
-				for(int i=0; i<3; i++){
-					n.rgbSum[i] += n.rgbArray[3*k+i];
-				}
-			}
-			for(int i=0; i<3; i++){
-				n.rgbAver[i] = n.rgbSum[i] / n.rgbCount;
-			}
-		}
-	}
-}
-
-void buildColorTree(ColorTree* tree, unsigned char* srcRgbArray, int srcRgbCount)
-{
-	if(srcRgbCount < 1){
-		printf("Error: creating color tree from 0 colors\n");
-		return;
-	}
-	memset(tree, 0, sizeof(ColorTree));
-	ColorTreeNode* root = allocNode(tree);
-	root->rgbCount = srcRgbCount;
-	root->rgbArray = srcRgbArray;
-	tree->leafCount = 1;
-	while(true){
-		if(tree->leafCount >= 256){
-			printf("Tree has 256 leafs\n");
-			processLeafs(tree);
-			break;
-		}
-		{//find fattest leaf and subdivide it
-			ColorTreeNode* fattestNode = NULL;
-			for(int i=0; i<=tree->nodeCount; i++){
-				ColorTreeNode* n = &tree->nodeArray[i];
-				if(n->isLeaf()){
-					if(n->rgbCount > 1){
-						if(!fattestNode || fattestNode->rgbCount < n->rgbCount){
-							fattestNode = n;
-						}
-					}
-				}
-			}
-			if(! fattestNode){
-				printf("All leafs have 1 element\n");
-				processLeafs(tree);
+	printf("Caculating palette by median cut\n");
+	static const int UniqueColorArraySize = 2048;
+	static unsigned char uniqueColorArray[UniqueColorArraySize*3];
+	int uniqueColorCount = 0;
+	
+	{//fill unique color array
+		printf("Determining unique color set [");
+		static char colorBitSet[256*256*256/8];
+		memset(colorBitSet, 0, 256*256*256/8);
+		for(Frame* frame=gif->frames; frame!=NULL; frame=frame->next){
+			if(uniqueColorCount >= UniqueColorArraySize){
 				break;
 			}
-			ColorTreeNode* n = fattestNode;
-			int rgbMin[3] = {n->rgbArray[0], n->rgbArray[1], n->rgbArray[2]};
-			int rgbMax[3] = {n->rgbArray[0], n->rgbArray[1], n->rgbArray[2]};
-			int rgbExt[3] = {0, 0, 0};
-			{//calculate array extents
-				for(int k=0; k<n->rgbCount; k++){
-					for(int i=0; i<3; i++){
-						int v = int(n->rgbArray[3*k+i]);
-						if(v < rgbMin[i]) rgbMin[i] = v;
-						if(rgbMax[i] < v) rgbMax[i] = v;
-					}
+			printf("*");
+			unsigned char* rgb = frame->rgbImage;
+			for(int i=0; i<gif->width*gif->height; i++){
+				if(uniqueColorCount >= UniqueColorArraySize){
+					break;
 				}
-				for(int i=0; i<3; i++){
-					rgbExt[i] = rgbMax[i] - rgbMin[i];
+				int colorIndex = int(rgb[0]) * 256 * 256 + int(rgb[1]) * 256 + int(rgb[2]);
+				if((colorBitSet[colorIndex/8] & (1 << (colorIndex%8))) == 0){
+					colorBitSet[colorIndex/8] |= (1 << (colorIndex%8));
+					unsigned char* u = uniqueColorArray + (uniqueColorCount++) * 3;
+					u[0] = rgb[0], u[1] = rgb[1], u[2] = rgb[2];
 				}
-			}
-			{//decide on divisor plane
-				if((rgbExt[0] > rgbExt[1]) && (rgbExt[0] > rgbExt[2])){
-					n->divAxis = 0;
-				}else if(rgbExt[1] > rgbExt[2]){
-					n->divAxis = 1;
-				}else{
-					n->divAxis = 2;
-				}
-				n->divValue = (rgbMin[n->divAxis] + rgbMax[n->divAxis]) / 2;
-			}
-			{//sort colors relative to divisor plane
-				unsigned char* rgbLeft = n->rgbArray, *rgbRight = n->rgbArray + 3 * (n->rgbCount-1);
-				while(rgbLeft < rgbRight){
-					while(rgbLeft[n->divAxis] <= n->divValue && rgbLeft < rgbRight){
-						rgbLeft += 3;
-					}
-					while(rgbRight[n->divAxis] > n->divValue && rgbLeft < rgbRight){
-						rgbRight -= 3;
-					}
-					if(rgbLeft < rgbRight){
-						for(int i=0; i<3; i++){
-							unsigned char x = rgbLeft[i];
-							rgbLeft[i] = rgbRight[i];
-							rgbRight[i] = x;
-						}
-					}
-				}
-				int inLeftCount = (rgbLeft - n->rgbArray) / 3;
-				int inRightCount = n->rgbCount - (rgbRight - n->rgbArray)/3 - 1;
-				if(inLeftCount > 0){
-					n->sub[0] = allocNode(tree);
-					if(n->sub[0]){
-						n->sub[0]->rgbCount = inLeftCount;
-						n->sub[0]->rgbArray = n->rgbArray;
-					}
-				}
-				if(inRightCount > 0){
-					n->sub[1] = allocNode(tree);
-					if(n->sub[1]){
-						n->sub[1]->rgbCount = inRightCount;
-						n->sub[1]->rgbArray = n->rgbArray + inLeftCount * 3;
-					}
-				}
-				if(n->sub[0] && n->sub[1]){
-					tree->leafCount ++;
-				}
+				rgb += 3;
 			}
 		}
-	}
-}
-
-
-int removeColorFromArray(unsigned char* rgbArray, int rgbCount, unsigned char r, unsigned char g, unsigned char b)
-{
-	int newCount = 0;
-	unsigned char* dst = rgbArray, *src = rgbArray;
-	for(int i=0; i<rgbCount; i++){
-		if(src[0] == r && src[1] == g && src[2] == b){
-			//skip it
-		}else{
-			newCount ++;
-			if(dst != src){
-				dst[0] = src[0], dst[1] = src[1], dst[2] = src[2];
-			}
-			dst += 3;
+		printf("]\nUnique color count %d\n", uniqueColorCount);
+		if(uniqueColorCount >= UniqueColorArraySize){
+			printf("Warning: image too rich. Try expanding unique color array.\n");
 		}
-		src += 3;
 	}
-	return newCount;
-}
-
-int calculatePaletteStatistically(unsigned char* rgbArray, int rgbCount, unsigned char* palette)
-{
-	int paletteSize = 0;
-	while(rgbCount > 0 && paletteSize < 256){
-		//int index = rand() * rgbCount / RAND_MAX;//pick random color. Statistically, it is likely to be most frequent color.
-		int index = rgbCount / 2;
-		//printf("index %d/%d\n", index, rgbCount);
-		unsigned char* rgb = rgbArray + 3 * index;
-		unsigned char* pal = palette + 3 * paletteSize;
-		for(int i=0; i<3; i++) pal[i] = rgb[i];
-		paletteSize ++;
-		rgbCount = removeColorFromArray(rgbArray, rgbCount, rgb[0], rgb[1], rgb[2]);
+	
+	struct ColorBox
+	{
+		char splitAxis;
+		char splitValue;
+		ColorBox* child[2];
+		int dim[3];
+		unsigned char* colors;
+		int colorCount;
+		bool isLeaf() {return child[0] == NULL && child[1] == NULL;}
+		void calcDim()
+		{
+			int minDim[3] = {255,255,255}, maxDim[3] = {0,0,0};
+			for(int i=0; i<colorCount; i++){
+				unsigned char* rgb = colors + i * 3;
+				for(int a=0; a<3; a++){
+					if(rgb[a] < minDim[a]) minDim[a] = rgb[a];
+					if(maxDim[a] < rgb[a]) maxDim[a] = rgb[a];
+				}
+			}
+			for(int a=0; a<3; a++){
+				dim[a] = maxDim[a] - minDim[a];
+			}
+			//printf("minDim(%d,%d,%d), maxDim(%d,%d,%d), dim(%d,%d,%d)\n", minDim[0],minDim[1],minDim[2], maxDim[0],maxDim[1],maxDim[2], dim[0], dim[1], dim[2]);
+		}
+		void calcColor(unsigned char* rgbOut)
+		{
+			int r = 0, g = 0, b = 0;
+			for(int i=0; i<colorCount; i++){
+				r += (colors + i * 3)[0];
+				g += (colors + i * 3)[1];
+				b += (colors + i * 3)[2];
+			}
+			rgbOut[0] = r / colorCount;
+			rgbOut[1] = g / colorCount;
+			rgbOut[2] = b / colorCount;
+		}
+	};
+	static const int ColorBoxArraySize = 512;
+	static ColorBox colorBoxArray[ColorBoxArraySize];
+	int colorBoxCount = 0;
+	int leafBoxCount = 0;
+	{
+		printf("Creating color boxes [");
+		memset(&colorBoxArray, 0, sizeof(ColorBox)*512);
+		colorBoxArray[0].colors = uniqueColorArray;
+		colorBoxArray[0].colorCount = uniqueColorCount;
+		colorBoxArray[0].calcDim();
+		colorBoxCount = 1;
+		leafBoxCount = 1;
+		while(leafBoxCount < 255){
+			printf("*");
+			int maxDimAxis = 0;
+			int maxDim = 0;
+			ColorBox* maxDimBox = NULL;
+			for(int i=0; i<colorBoxCount; i++){
+				ColorBox* box = colorBoxArray + i;
+				if(! box->isLeaf()){
+					continue;
+				}
+				if(box->colorCount < 2){
+					continue;
+				}
+				for(int axis=0; axis<3; axis++){
+					if(box->dim[axis] > maxDim || maxDimBox == NULL){
+						maxDim = box->dim[axis];
+						maxDimAxis = axis;
+						maxDimBox = box;
+					}
+				}
+			}
+			if(maxDim < 2){
+				break;
+			}
+			//printf("maxDim %d, maxDimAxis %d\n", maxDim, maxDimAxis);
+			if(colorBoxCount + 2 <= ColorBoxArraySize){
+				maxDimBox->splitAxis = maxDimAxis;
+				//maxDimBox->splitValue = ???;
+				sortColorsByAxis(maxDimBox->colors, maxDimBox->colorCount, maxDimAxis);
+				ColorBox* L = maxDimBox->child[0] = &colorBoxArray[colorBoxCount++];
+				ColorBox* R = maxDimBox->child[1] = &colorBoxArray[colorBoxCount++];
+				//printf("Sorted array by axis\n"); for(int i=0; i<maxDimBox->colorCount; i++) printf("%d, ", (maxDimBox->colors+i*3)[maxDimAxis]); printf("\n");
+				L->colors = maxDimBox->colors;
+				L->colorCount = maxDimBox->colorCount / 2;
+				R->colors = maxDimBox->colors + L->colorCount * 3;
+				R->colorCount = maxDimBox->colorCount - L->colorCount;
+				L->calcDim();
+				R->calcDim();
+				leafBoxCount++;
+			}else{
+				printf("Error: insufficient color box array size\n");
+				break;
+			}
+		}
+		printf("]\n");
+		printf("Total box count %d, leaf box count %d\n", colorBoxCount, leafBoxCount);
+		{
+			printf("Calculating palette from boxes\n");
+			gif->paletteSize = leafBoxCount;
+			gif->palette = new unsigned char[256*3];
+			unsigned char* rgbPal = gif->palette;
+			for(int i=0; i<colorBoxCount; i++){
+				if(colorBoxArray[i].isLeaf()){
+					colorBoxArray[i].calcColor(rgbPal);
+					rgbPal += 3;
+				}
+			}
+			printf("Indexizing frames [");
+			for(Frame* frame=gif->frames; frame!=NULL; frame=frame->next){
+				printf("*");
+				frame->indexImage = new unsigned char[gif->width * gif->height];
+				indexizeImageFromPaletteFuzzy(gif->width, gif->height, frame->rgbImage, frame->indexImage, gif->palette, gif->paletteSize);
+			}
+			printf("]\n");
+		}
 	}
-	if(rgbCount <= 0){
-		//TODO: return "palette is precise" code
-	}
-	return paletteSize;
 }
 
 void addFrame(GIF* gif, int W, int H, unsigned char* rgbImage, int delay)
 {
 	Frame* f = new Frame;
 	f->delay = delay;
-	f->indexImage = new unsigned char[W*H];
-	
-	if(! gif->palette){
-		unsigned char* rgbTempArray = new unsigned char[W*H*3];
-		memcpy(rgbTempArray, rgbImage, W*H*3);
-		gif->palette = new unsigned char[256*3];
-		memset(gif->palette, 0, 256*3);
-		gif->paletteSize = calculatePaletteStatistically(rgbTempArray, W*H, gif->palette);
-		delete[] rgbTempArray;
-	}
-	if(gif->palette){
-		indexizeImageFromPaletteFuzzy(W, H, rgbImage, f->indexImage, gif->palette, gif->paletteSize);
-	}
+	f->indexImage = NULL;
+	f->rgbImage = new unsigned char[W*H*3];
+	memcpy(f->rgbImage, rgbImage, W*H*3);
 	f->next = NULL;
 	if(gif->lastFrame){
 		gif->lastFrame->next = f;
@@ -580,6 +522,12 @@ void write(GIF* gif, const char* filename)
 		printf("GIF incomplete\n");
 		return;
 	}
+	
+	{
+		//calculate global palette
+		calculatePaletteByMedianCut(gif);
+	}
+	
 	if(! filename){
 		static char defaultFilename[256] = "test.gif";
 		snprintf(defaultFilename, 256, "%d.gif", int(time(0)));
@@ -668,7 +616,7 @@ void write(GIF* gif, const char* filename)
 				if(1){//crop image if has transparent pixels on borders
 					int cLeft, cRight, cTop, cBottom;
 					calculatePossibleCrop(gif->width, gif->height, image, TranspColorIndex, cLeft, cRight, cTop, cBottom);
-					if(cLeft <= cRight && cTop <= cBottom){
+					if(cLeft <= cRight && cTop <= cBottom && cLeft>0 && cTop>0 && cRight<gif->width-1 && cBottom<gif->height-1){
 						fLeft = cLeft;
 						fTop = cTop;
 						fWidth = cRight + 1 - cLeft;
