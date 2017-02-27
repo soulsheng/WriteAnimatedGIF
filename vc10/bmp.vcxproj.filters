@@ -29,5 +29,8 @@
     <ClInclude Include="..\simpleBMP.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="..\bmp2gif.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

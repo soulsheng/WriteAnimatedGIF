@@ -79,6 +79,7 @@
     <ClCompile Include="..\WriteGIF.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\bmp2gif.h" />
     <ClInclude Include="..\simpleBMP.h" />
     <ClInclude Include="..\WriteGIF.h" />
   </ItemGroup>
