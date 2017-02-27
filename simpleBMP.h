@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#define	INVERT_LINE_ORDER	1	// invert line order
+
 //BMP structure infomation : http://www.cnblogs.com/xiekeli/archive/2012/05/09/2491191.html
 
 #pragma pack(1) // For MSVC,disable struct Pack,or short will take 32bit mem as int32_t
@@ -46,10 +48,12 @@ public:
 	ClBitMapFileHeader bmpFileHeaderData;
 	ClBitMapInfoHeader bmpInfoHeaderData;
 	ClrgbMap colorMap[256];
-	std::vector<uint8_t> imgData;
+	uint8_t* imgData;//std::vector<uint8_t> imgData;
 
 	inline bool LoadImage(const char* path);
 	inline bool SaveImage(const char* path);
+	ClImgBMP()	{ imgData = NULL; }
+	~ClImgBMP()	{ if(imgData) delete[] imgData; }
 };
 #pragma pack()// reset to default
 
@@ -62,7 +66,7 @@ bool ClImgBMP::LoadImage(const char* path)
 	{
 		return 0;
 	}
-	imgData.clear();
+
 	// Processing
 	fread(&bmpFileHeaderData, sizeof(ClBitMapFileHeader), 1, pFile);
 	if (bmpFileHeaderData.bfType == 0x4D42) // Check is it an RGB file
@@ -88,15 +92,21 @@ bool ClImgBMP::LoadImage(const char* path)
 		{
 			offset = 4 - offset;
 		}
+		if( NULL == imgData )
+			imgData = new uint8_t[bmpInfoHeaderData.biHeight * linelength];
+		uint8_t* iter = imgData;
 		// Read Pixel
 		uint8_t pixVal;
 		for (int i = 0; i < bmpInfoHeaderData.biHeight; i++)
 		{
+#if INVERT_LINE_ORDER
+			fread( imgData + (bmpInfoHeaderData.biHeight - 1 - i)*linelength, linelength, 1, pFile);
+#else			
 			for (int j = 0; j < linelength; j++)
 			{
-				fread(&pixVal, sizeof(uint8_t), 1, pFile);
-				imgData.push_back(pixVal);
+				fread(iter++, sizeof(uint8_t), 1, pFile);
 			}
+#endif
 			for (int k = 0; k < offset; k++)
 			{
 				fread(&pixVal, sizeof(uint8_t), 1, pFile);
@@ -146,15 +156,20 @@ bool ClImgBMP::SaveImage(const char* path)
 	}
 	// Write Pixel
 	uint8_t pixVal;
-	auto iter = imgData.begin();
+	uint8_t* iter = imgData;
+	//auto iter = imgData.begin();
 	for (int i = 0; i < bmpInfoHeaderData.biHeight; i++)
 	{
+#if INVERT_LINE_ORDER
+		fwrite( imgData + (bmpInfoHeaderData.biHeight - 1 - i)*linelength, linelength, 1, pFile);
+#else
 		for (int j = 0; j < linelength; j++)
 		{
 			pixVal = *iter;
 			fwrite(&pixVal, sizeof(uint8_t), 1, pFile);
 			iter += 1;
 		}
+#endif
 		pixVal = 0;
 		for (int k = 0; k < offset; k++)
 		{

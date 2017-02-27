@@ -12,13 +12,18 @@ int main(int argc, char* argv[])
 	_snprintf( sPath, sizeof(sPath), FORMAT_PATH, BMP_PATH, 1, '\0');
 	ClImgBMP	bmp;
 	bmp.LoadImage( sPath );
-	gif::addFrame(g, bmp.bmpInfoHeaderData.biWidth, bmp.bmpInfoHeaderData.biHeight, bmp.imgData._Myfirst, 0);
+	gif::addFrame(g, bmp.bmpInfoHeaderData.biWidth, bmp.bmpInfoHeaderData.biHeight, bmp.imgData, 0);
+
+#if 1// test save
+	_snprintf( sPath, sizeof(sPath), FORMAT_PATH, BMP_PATH, 0, '\0');
+	bmp.SaveImage( sPath );
+#endif
 
 	const int FrameCount = 12;
 	for(int i=0; i<FrameCount; i++){
 		_snprintf( sPath, sizeof(sPath), FORMAT_PATH, BMP_PATH, i, '\0');
 		bmp.LoadImage( sPath );
-		gif::addFrame(g, bmp.bmpInfoHeaderData.biWidth, bmp.bmpInfoHeaderData.biHeight, bmp.imgData._Myfirst, 0);
+		gif::addFrame(g, bmp.bmpInfoHeaderData.biWidth, bmp.bmpInfoHeaderData.biHeight, bmp.imgData, 0);
 	}
 
 	gif::write(g, NULL);
